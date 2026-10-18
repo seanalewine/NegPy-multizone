@@ -29,12 +29,10 @@ class TestResolveZoneSelection:
             3: (0.0, 0.5, 1.0, 1.0),
         }
 
-    def test_empty_zones_yields_empty_selection(self) -> None:
+    def test_no_zones_yields_empty_selection(self) -> None:
         frames, windows = resolve_zone_selection(ScannerSettings())
         assert frames == ()
         assert windows == {}
-
-    def test_none_zones_yields_empty_selection(self) -> None:
         frames, windows = resolve_zone_selection(ScannerSettings(zones=None))
         assert frames == ()
         assert windows == {}
