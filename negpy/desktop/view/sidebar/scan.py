@@ -430,7 +430,7 @@ class ScanSidebar(QWidget):
         self.scan_btn.setFixedHeight(SCAN_BUTTON_HEIGHT)
         self.scan_btn.setProperty("scanning", "false")
         self.scan_btn.setIcon(qta.icon("fa5s.camera-retro", color=THEME.text_on_accent))
-        self.scan_btn.setToolTip(wrap_tooltip("Scan the selected frames into the output folder, or stop the scan"))
+        self.scan_btn.setToolTip(wrap_tooltip("Scan the selected frames (or crop zones) into the output folder, or stop the scan"))
         foot.addWidget(self.scan_btn)
         layout.addWidget(self.footer)
 
@@ -872,6 +872,8 @@ class ScanSidebar(QWidget):
         # Which frames to scan: every transport that reaches more than one frame, whether it
         # counts slots or measures them off the film.
         is_strip = _reaches_a_strip(caps)
+        # Flatbed+TPU single-surface devices batch by crop zones instead of frames.
+        is_zones = bool(getattr(caps, "zone_batch", False)) and not is_strip
         self.frame_spec_widget.setVisible(is_strip)
         self.eject_after_act.setVisible(is_strip and caps.can_eject)
         if is_strip:
@@ -883,10 +885,13 @@ class ScanSidebar(QWidget):
         self.scan_window_widget.setVisible(use_window)
         self.scan_window_status.setVisible(use_window)
         if use_window:
-            self.scan_window_row_label.setText("Batch" if is_strip else "Window")
+            self.scan_window_row_label.setText("Batch" if is_strip else ("Zones" if is_zones else "Window"))
             if is_strip:
                 self.scan_window_btn.setText(" Preview strip…")
                 self.scan_window_btn.setToolTip("Preview each frame, set a window per frame, and pick which frames to scan")
+            elif is_zones:
+                self.scan_window_btn.setText(" Preview zones…")
+                self.scan_window_btn.setToolTip("Preview the transparency area, lay out crop zones, and scan each zone as its own image")
             else:
                 self.scan_window_btn.setText(" Preview…")
                 self.scan_window_btn.setToolTip("Preview the current holder position and set a crop window for the scan")
@@ -1066,6 +1071,31 @@ class ScanSidebar(QWidget):
                     self._on_scan()
             return
 
+        if getattr(device.capabilities, "zone_batch", False):
+            from negpy.desktop.view.widgets.quick_scan_preview_dialog import QuickScanPreviewDialog
+
+            dialog = QuickScanPreviewDialog(
+                self.controller,
+                device,
+                initial_window=self._settings.scan_window,
+                film_type=self._film_type(),
+                parent=self,
+                repo=self.controller.session.repo,
+                zone_mode=True,
+                initial_zones=self._settings.zones,
+            )
+            if dialog.exec():
+                zones = dialog.zones()
+                self.settings = replace(
+                    self._settings,
+                    zones=zones or None,
+                    scan_window=None,
+                )
+                self._update_scan_window_status()
+                if dialog.scan_requested():
+                    self._on_scan()
+            return
+
         from negpy.desktop.view.widgets.quick_scan_preview_dialog import QuickScanPreviewDialog
 
         dialog = QuickScanPreviewDialog(
@@ -1236,6 +1266,22 @@ class ScanSidebar(QWidget):
             win_txt = count_of(n_windows, "window") if n_windows else "Full frame"
             self.scan_window_status.setText(f"{win_txt}{offset_txt}")
             return
+        if device is not None and getattr(device.capabilities, "zone_batch", False):
+            zones = self._settings.zones or []
+            if not zones:
+                self.scan_window_status.setText(f"Full frame{offset_txt}")
+                return
+            sizes: list[str] = []
+            for zone in zones:
+                area = scan_window_to_area(zone, device.capabilities.max_area_mm)
+                if area is not None:
+                    tl_x, tl_y, br_x, br_y = area
+                    sizes.append(f"{br_x - tl_x:.1f}×{br_y - tl_y:.1f}")
+            zone_txt = count_of(len(zones), "zone")
+            if sizes:
+                zone_txt += "  ·  " + "  ".join(f"{i + 1}:{s} mm" for i, s in enumerate(sizes))
+            self.scan_window_status.setText(f"{zone_txt}{offset_txt}")
+            return
         area = scan_window_to_area(self._settings.scan_window, device.capabilities.max_area_mm) if device else None
         if area is None:
             self.scan_window_status.setText(f"Full frame{offset_txt}")
@@ -1260,6 +1306,21 @@ class ScanSidebar(QWidget):
         except (ValueError, TypeError):
             return fallback
 
+    def _zone_selection(self) -> tuple[tuple[int, ...], dict[int, tuple[float, float, float, float]]] | None:
+        """(zone indices, per-zone windows) when this device batches by flatbed zones, else None.
+
+        None means either the device does not support zone batches or the operator has laid
+        out no zones yet — the caller keeps the single-window path.
+        """
+        device = self._current_device()
+        if device is None or not getattr(device.capabilities, "zone_batch", False):
+            return None
+        if not self._settings.zones:
+            return None
+        from negpy.infrastructure.scanners.settings import resolve_zone_selection
+
+        return resolve_zone_selection(self._settings)
+
     def _update_summary(self) -> None:
         """One line saying what pressing Scan will do: how much film, at what resolution,
         with which passes, and how much disk it takes."""
@@ -1280,14 +1341,19 @@ class ScanSidebar(QWidget):
             return
         if not self._scanning:
             self.scan_btn.setEnabled(True)
-        frames, windows, base_window = resolve_batch_selection(
-            replace(self._settings, selected_frames=spec),
-            capacity=caps.adapter_frame_capacity,
-            whole_strip=caps.roll_discovery,
-        )
-        if not _reaches_a_strip(caps):
-            frames = (1,)
-            base_window = self._settings.scan_window
+        zones = self._zone_selection()
+        if zones is not None:
+            frames, windows = zones
+            base_window = None
+        else:
+            frames, windows, base_window = resolve_batch_selection(
+                replace(self._settings, selected_frames=spec),
+                capacity=caps.adapter_frame_capacity,
+                whole_strip=caps.roll_discovery,
+            )
+            if not _reaches_a_strip(caps):
+                frames = (1,)
+                base_window = self._settings.scan_window
         dpi = self._dpi()
         depth = int(self.depth_btn.currentData() or 16)
         capture_ir = self.ir_btn.isEnabled() and self.ir_btn.isChecked()
@@ -1310,8 +1376,14 @@ class ScanSidebar(QWidget):
         # The count and the size are what the operator checks before committing, so they carry
         # primary weight; the rest of the line stays secondary.
         strong = f'<span style="color: {THEME.text_primary}">{{}}</span>'
+        if zones is not None:
+            count_txt = count_of(len(frames), "zone")
+        elif frames:
+            count_txt = count_of(len(frames), "frame")
+        else:
+            count_txt = "Whole strip"
         parts = [
-            strong.format(count_of(len(frames), "frame") if frames else "Whole strip"),
+            strong.format(count_txt),
             f"{dpi} dpi",
             *passes,
             strong.format(size),
@@ -1370,11 +1442,15 @@ class ScanSidebar(QWidget):
         if self._frame_spec() is None:
             return
         self._update_settings_from_ui()
+        zone_selection = self._zone_selection()
         frames, frame_windows, base_window = resolve_batch_selection(
             self._settings,
             capacity=device.capabilities.adapter_frame_capacity,
             whole_strip=device.capabilities.roll_discovery,
         )
+        if zone_selection is not None:
+            frames, frame_windows = zone_selection
+            base_window = None
         exposure_time_us = (
             self._settings.exposure_time_us if self._settings.exposure_time_us is not None and not self.exposure_slider.isHidden() else None
         )
@@ -1402,7 +1478,7 @@ class ScanSidebar(QWidget):
         self.set_scanning(True)
 
         try:
-            if _reaches_a_strip(device.capabilities):
+            if _reaches_a_strip(device.capabilities) or zone_selection is not None:
                 self.controller.start_batch(
                     BatchRequest(
                         device_id=device.id,
@@ -1414,8 +1490,10 @@ class ScanSidebar(QWidget):
                         frame_windows=frame_windows,
                         frame_offset_modifier_mm=self._settings.frame_offset_modifier_mm,
                         frame_offsets=self._settings.frame_offsets,
-                        eject_when_done=self._settings.eject_after_batch,
+                        eject_when_done=self._settings.eject_after_batch if _reaches_a_strip(device.capabilities) else False,
                         as_roll=as_roll,
+                        unit_name="Zone" if zone_selection is not None else "Frame",
+                        address_frames=zone_selection is None,
                     )
                 )
             else:
@@ -1455,7 +1533,8 @@ class ScanSidebar(QWidget):
         self.set_scanning(False)
         self.status_strip.stop_progress()
         if paths:
-            self.status_strip.set_message(f"Batch complete: {count_of(len(paths), 'frame')}")
+            unit = "zone" if self._zone_selection() is not None else "frame"
+            self.status_strip.set_message(f"Batch complete: {count_of(len(paths), unit)}")
 
     @pyqtSlot()
     def _on_scan_cancelled(self) -> None:

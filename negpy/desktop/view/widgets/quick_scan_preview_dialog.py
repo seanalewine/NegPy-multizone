@@ -2,21 +2,32 @@
 no addressable frame adapter (Plustek: one manual holder, not a strip/roll feeder —
 see StripPreviewDialog for that case).
 
-Read after ``exec()`` via ``window()``.
+Zone mode (flatbed+TPU, e.g. the Epson V600): the same preview hosts any number of
+persistent crop zones, each scanning as its own image. Read after ``exec()`` via
+``window()`` (single-window) or ``zones()`` (zone mode).
 """
 
 import qtawesome as qta
 from PyQt6.QtCore import pyqtSlot
-from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PyQt6.QtGui import QKeySequence, QPixmap, QShortcut
+from PyQt6.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+)
+from typing import cast
 
 from negpy.desktop.converters import ImageConverter
 from negpy.desktop.view.styles.templates import StatusStrip, pin_dialog_default
 from negpy.desktop.view.styles.theme import THEME
 from negpy.desktop.view.widgets.dialog_geometry import remember_dialog_geometry
 from negpy.desktop.view.widgets.scan_preview_common import RollPreviewSignalsMixin, preview_positive
+from negpy.desktop.view.widgets.scan_window_geometry import default_zone
 from negpy.desktop.view.widgets.scan_window_label import ScanWindowLabel
 from negpy.desktop.view.widgets.step_combo import StepCombo
+from negpy.desktop.view.widgets.zone_canvas_label import ZoneCanvasLabel
 from negpy.desktop.workers.scan_worker import RollPreviewRequest
 from negpy.infrastructure.scanners.base import ScannerDevice
 
@@ -25,10 +36,19 @@ _PREVIEW_SLOT = 1  # PerFrameRollSession's only slot on a frame-less device
 
 
 class QuickScanPreviewDialog(RollPreviewSignalsMixin, QDialog):
-    """Preview the current holder position at low res; set a crop window for the real scan."""
+    """Preview the current holder position at low res; set a crop window or crop zones for the real scan."""
 
     def __init__(
-        self, controller, device: ScannerDevice, initial_window=None, film_type: str = "negative", parent=None, *, repo=None
+        self,
+        controller,
+        device: ScannerDevice,
+        initial_window=None,
+        film_type: str = "negative",
+        parent=None,
+        *,
+        repo=None,
+        zone_mode: bool = False,
+        initial_zones=None,
     ) -> None:
         super().__init__(parent)
         self._controller = controller
@@ -37,16 +57,24 @@ class QuickScanPreviewDialog(RollPreviewSignalsMixin, QDialog):
         self._caps = device.capabilities
         self._previewing = False
         self._scan_now = False  # set when the user chooses "Scan" over "Use"
-        self.setWindowTitle("Preview — Set the Scan Window")
+        self._zone_mode = zone_mode
+        self.setWindowTitle("Preview — Set Scan Zones" if zone_mode else "Preview — Set the Scan Window")
         self.setModal(True)
         self.resize(560, 480)
 
         layout = QVBoxLayout(self)
 
-        help_lbl = QLabel(
-            "Preview the current holder position, then drag to crop — a corner to resize, "
-            "inside to move. Use Apply Window (apply and return) or Scan (start scanning now)."
-        )
+        if zone_mode:
+            help_lbl = QLabel(
+                "Preview the transparency area, then draw a box for each crop — zones are added "
+                "as you draw and stay visible. Click a zone's border to select it (or use the "
+                "arrows), Delete to remove it. Each zone scans as its own image, in order."
+            )
+        else:
+            help_lbl = QLabel(
+                "Preview the current holder position, then drag to crop — a corner to resize, "
+                "inside to move. Use Apply Window (apply and return) or Scan (start scanning now)."
+            )
         help_lbl.setWordWrap(True)
         help_lbl.setStyleSheet(
             f"color: {THEME.text_secondary}; font-size: {THEME.font_size_small}px;"
@@ -63,34 +91,72 @@ class QuickScanPreviewDialog(RollPreviewSignalsMixin, QDialog):
         self.preview_dpi_combo.setToolTip("Resolution used for the preview scan")
         top.addWidget(self.preview_dpi_combo)
         top.addStretch()
+        if zone_mode:
+            self.prev_zone_btn = QPushButton(qta.icon("fa5s.chevron-left", color=THEME.text_primary), "")
+            self.prev_zone_btn.setFixedWidth(32)
+            self.prev_zone_btn.setToolTip("Select the previous zone (Ctrl+Left)")
+            self.prev_zone_btn.clicked.connect(lambda: self._cycle_active(-1))
+            top.addWidget(self.prev_zone_btn)
+            self.next_zone_btn = QPushButton(qta.icon("fa5s.chevron-right", color=THEME.text_primary), "")
+            self.next_zone_btn.setFixedWidth(32)
+            self.next_zone_btn.setToolTip("Select the next zone (Ctrl+Right)")
+            self.next_zone_btn.clicked.connect(lambda: self._cycle_active(1))
+            top.addWidget(self.next_zone_btn)
+            self.add_zone_btn = QPushButton(qta.icon("fa5s.plus", color=THEME.text_primary), " Add Zone")
+            self.add_zone_btn.setToolTip(
+                "Add a new zone (keyboard: A or +) — a copy of the active zone, or a centered "
+                "box if there are none yet; drag it into place afterwards"
+            )
+            self.add_zone_btn.clicked.connect(self._add_zone)
+            top.addWidget(self.add_zone_btn)
+            self.remove_zone_btn = QPushButton(qta.icon("fa5s.minus", color=THEME.text_primary), " Remove Zone")
+            self.remove_zone_btn.setToolTip("Remove the active zone (keyboard: Delete)")
+            self.remove_zone_btn.clicked.connect(self._remove_zone)
+            top.addWidget(self.remove_zone_btn)
         self.preview_btn = QPushButton(qta.icon("fa5s.eye", color=THEME.text_primary), " Preview")
         self.preview_btn.clicked.connect(self._on_preview)
         top.addWidget(self.preview_btn)
         layout.addLayout(top)
 
-        self.label = ScanWindowLabel()
-        self.label.set_window(tuple(initial_window) if initial_window else None)
+        if zone_mode:
+            self.label = ZoneCanvasLabel()
+            if initial_zones:
+                self.label.set_zones(list(initial_zones))
+        else:
+            self.label = ScanWindowLabel()
+            self.label.set_window(tuple(initial_window) if initial_window else None)
         layout.addWidget(self.label, 1)
+
+        if zone_mode:
+            self._install_shortcuts()
 
         # One reserved row: the pass that is running, or the message it left behind.
         self.status_strip = StatusStrip(lines=1)
         layout.addWidget(self.status_strip)
 
         btns = QHBoxLayout()
-        self.clear_btn = QPushButton("Clear Crop")
-        self.clear_btn.setToolTip("Scan the whole frame instead")
-        self.clear_btn.clicked.connect(self.label.clear_window)
+        self.clear_btn = QPushButton("Clear Zones" if zone_mode else "Clear Crop")
+        if zone_mode:
+            canvas = cast(ZoneCanvasLabel, self.label)
+            self.clear_btn.setToolTip("Remove all zones and start over")
+            self.clear_btn.clicked.connect(canvas.clear_zones)
+        else:
+            single = cast(ScanWindowLabel, self.label)
+            self.clear_btn.setToolTip("Scan the whole frame instead")
+            self.clear_btn.clicked.connect(single.clear_window)
         btns.addWidget(self.clear_btn)
         btns.addStretch()
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self._on_cancel_clicked)
         btns.addWidget(self.cancel_btn)
-        self.ok_btn = QPushButton("Apply Window")
-        self.ok_btn.setToolTip("Keep this window and return to the Scan panel")
-        self.ok_btn.clicked.connect(self.accept)
+        self.ok_btn = QPushButton("Apply Zones" if zone_mode else "Apply Window")
+        self.ok_btn.setToolTip(
+            "Keep these zones and return to the Scan panel" if zone_mode else "Keep this window and return to the Scan panel"
+        )
+        self.ok_btn.clicked.connect(self._on_apply_clicked)
         btns.addWidget(self.ok_btn)
-        self.scan_btn = QPushButton(qta.icon("fa5s.play", color=THEME.text_primary), " Scan Frame")
-        self.scan_btn.setToolTip("Scan now with the current settings")
+        self.scan_btn = QPushButton(qta.icon("fa5s.play", color=THEME.text_primary), " Scan Zones" if zone_mode else " Scan Frame")
+        self.scan_btn.setToolTip("Scan these zones now with the current settings" if zone_mode else "Scan now with the current settings")
         self.scan_btn.clicked.connect(self._on_scan_clicked)
         btns.addWidget(self.scan_btn)
         pin_dialog_default(self.scan_btn, self.clear_btn, self.cancel_btn, self.ok_btn)
@@ -102,13 +168,75 @@ class QuickScanPreviewDialog(RollPreviewSignalsMixin, QDialog):
     # ── result getters ────────────────────────────────────────────────
 
     def window(self):
-        return self.label.window()
+        """The single crop rect (non-zone mode only)."""
+        return None if self._zone_mode else self.label.window()
+
+    def zones(self) -> list[tuple[float, float, float, float]]:
+        """Ordered normalized (x1,y1,x2,y2) crop rects, in scan order. Empty in single-window mode."""
+        if not self._zone_mode:
+            return []
+        assert isinstance(self.label, ZoneCanvasLabel)
+        return self.label.zones()
 
     def scan_requested(self) -> bool:
         """True when the dialog was accepted via Scan (start now), not Use."""
         return self._scan_now
 
+    # ── zone batch ────────────────────────────────────────────────────
+
+    def _install_shortcuts(self) -> None:
+        self._shortcuts: list[QShortcut] = []
+
+        def bind(keys: str, fn) -> None:
+            sc = QShortcut(QKeySequence(keys), self)
+            sc.activated.connect(fn)
+            self._shortcuts.append(sc)
+
+        bind("A", self._add_zone)
+        bind("+", self._add_zone)
+        bind("=", self._add_zone)
+        bind("Delete", self._remove_zone)
+        bind("Backspace", self._remove_zone)
+        bind("Ctrl+Left", lambda: self._cycle_active(-1))
+        bind("Ctrl+Right", lambda: self._cycle_active(1))
+
+    def _add_zone(self) -> None:
+        if not self._zone_mode:
+            return
+        assert isinstance(self.label, ZoneCanvasLabel)
+        current = self.label.zones()
+        source = current[self.label.active()] if 0 <= self.label.active() < len(current) else default_zone()
+        self.label.set_zones([*current, source])
+        self.status_strip.set_message("New zone added — drag it, or a corner, to size it.")
+
+    def _remove_zone(self) -> None:
+        if not self._zone_mode:
+            return
+        assert isinstance(self.label, ZoneCanvasLabel)
+        idx = self.label.active()
+        if idx < 0:
+            self.status_strip.set_message("Select a zone first (click its border or use the arrows).")
+            return
+        zones = self.label.zones()
+        del zones[idx]
+        self.label.set_zones(zones)
+        if zones:
+            self.label.set_active(min(idx, len(zones) - 1))
+        self.status_strip.set_message("Zone removed.")
+
+    def _cycle_active(self, delta: int) -> None:
+        if not self._zone_mode:
+            return
+        assert isinstance(self.label, ZoneCanvasLabel)
+        n = len(self.label.zones())
+        if n == 0:
+            return
+        self.label.set_active((self.label.active() + delta) % n)
+
     # ── ui state ──────────────────────────────────────────────────────
+
+    def _on_apply_clicked(self) -> None:
+        self.accept()
 
     def _on_scan_clicked(self) -> None:
         self._scan_now = True
