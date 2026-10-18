@@ -50,6 +50,14 @@ class QuickScanPreviewDialog(RollPreviewSignalsMixin, QDialog):
         layout = QVBoxLayout(self)
 
         if zone_mode:
+            self.label = ZoneCanvasLabel()
+            if initial_zones:
+                self.label.set_zones(list(initial_zones))
+        else:
+            self.label = ScanWindowLabel()
+            self.label.set_window(tuple(initial_window) if initial_window else None)
+
+        if zone_mode:
             help_lbl = QLabel(
                 "Preview the transparency area, then draw a box for each frame or zone — a corner "
                 "to resize, inside to move. Click a zone's border to select it (or use the navigation "
@@ -98,18 +106,15 @@ class QuickScanPreviewDialog(RollPreviewSignalsMixin, QDialog):
             self.remove_zone_btn.setToolTip("Remove the active zone (keyboard: Delete)")
             self.remove_zone_btn.clicked.connect(self._remove_zone)
             top.addWidget(self.remove_zone_btn)
+            self.clear_zone_btn = QPushButton(qta.icon("fa5s.trash-alt", color=THEME.text_primary), " Clear Zones")
+            self.clear_zone_btn.setToolTip("Remove all zones and start over")
+            self.clear_zone_btn.clicked.connect(cast(ZoneCanvasLabel, self.label).clear_zones)
+            top.addWidget(self.clear_zone_btn)
         self.preview_btn = QPushButton(qta.icon("fa5s.eye", color=THEME.text_primary), " Preview")
         self.preview_btn.clicked.connect(self._on_preview)
         top.addWidget(self.preview_btn)
         layout.addLayout(top)
 
-        if zone_mode:
-            self.label = ZoneCanvasLabel()
-            if initial_zones:
-                self.label.set_zones(list(initial_zones))
-        else:
-            self.label = ScanWindowLabel()
-            self.label.set_window(tuple(initial_window) if initial_window else None)
         layout.addWidget(self.label, 1)
 
         if zone_mode:
@@ -120,16 +125,12 @@ class QuickScanPreviewDialog(RollPreviewSignalsMixin, QDialog):
         layout.addWidget(self.status_strip)
 
         btns = QHBoxLayout()
-        self.clear_btn = QPushButton("Clear Zones" if zone_mode else "Clear Crop")
-        if zone_mode:
-            canvas = cast(ZoneCanvasLabel, self.label)
-            self.clear_btn.setToolTip("Remove all zones and start over")
-            self.clear_btn.clicked.connect(canvas.clear_zones)
-        else:
+        if not zone_mode:
+            self.clear_btn = QPushButton("Clear Crop")
             single = cast(ScanWindowLabel, self.label)
             self.clear_btn.setToolTip("Scan the whole frame instead")
             self.clear_btn.clicked.connect(single.clear_window)
-        btns.addWidget(self.clear_btn)
+            btns.addWidget(self.clear_btn)
         btns.addStretch()
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self._on_cancel_clicked)
@@ -144,7 +145,12 @@ class QuickScanPreviewDialog(RollPreviewSignalsMixin, QDialog):
         self.scan_btn.setToolTip("Scan these zones now with the current settings" if zone_mode else "Scan now with the current settings")
         self.scan_btn.clicked.connect(self._on_scan_clicked)
         btns.addWidget(self.scan_btn)
-        pin_dialog_default(self.scan_btn, self.clear_btn, self.cancel_btn, self.ok_btn)
+        pin_dialog_default(
+            self.scan_btn,
+            *(self.clear_zone_btn,) if zone_mode else (self.clear_btn,),
+            self.cancel_btn,
+            self.ok_btn,
+        )
         layout.addLayout(btns)
 
         self._connect_preview_signals()

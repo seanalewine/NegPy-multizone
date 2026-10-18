@@ -220,3 +220,28 @@ class TestZoneModeDialog:
         assert not hasattr(dialog, "load_zone_btn")
         assert not hasattr(dialog, "update_zone_btn")
         assert not hasattr(dialog, "zone_list")
+
+    def test_clear_zones_rides_with_the_zone_editing_buttons(self, qapp) -> None:
+        """Clear Zones lives on the toolbar row with Add/Remove Zone, not the footer exits."""
+        dialog = self._dialog(qapp)
+        main = dialog.layout()
+        toolbar = next(
+            lay for i in range(main.count()) if (lay := main.itemAt(i).layout()) is not None and lay.indexOf(dialog.add_zone_btn) >= 0
+        )
+        footer = next(
+            lay for i in range(main.count()) if (lay := main.itemAt(i).layout()) is not None and lay.indexOf(dialog.cancel_btn) >= 0
+        )
+
+        assert toolbar.indexOf(dialog.remove_zone_btn) >= 0
+        assert toolbar.indexOf(dialog.clear_zone_btn) >= 0
+        assert footer.indexOf(dialog.clear_zone_btn) < 0
+
+    def test_clear_zones_button_clears_the_canvas(self, qapp) -> None:
+        dialog = self._dialog(qapp)
+        canvas = cast(ZoneCanvasLabel, dialog.label)
+        canvas.set_zones([(0.1, 0.1, 0.5, 0.5), (0.6, 0.6, 0.9, 0.9)])
+        qapp.processEvents()
+
+        dialog.clear_zone_btn.click()
+
+        assert dialog.zones() == []
