@@ -49,18 +49,12 @@ class TestZoneBatchCapability:
         assert caps.adapter_frame_capacity == 6
         assert caps.zone_batch is False
 
-    def test_dedicated_film_scanner_no_source_is_not_zone_batch(self) -> None:
-        """Inferred sources (no `source` option) must never qualify: pieusb & friends."""
+    def test_no_source_never_zone_batch(self) -> None:
+        """No `source` option at all (whether or not inference kicks in) → not zone batch."""
+        caps = _caps_from_options({})
+        assert caps.zone_batch is False
+
         o = {"mode": FakeOption(constraint=["Color", "RGBI"])}
         caps = _caps_from_options(o, device_id="pieusb:libusb:001:003")
         assert ScanMode.TRANSPARENCY in caps.sources  # inference populated it
         assert caps.zone_batch is False  # but it is not a single-surface zone device
-
-    def test_no_source_no_inference_is_not_zone_batch(self) -> None:
-        caps = _caps_from_options({})
-        assert caps.zone_batch is False
-
-    def test_default_false_when_absent(self) -> None:
-        # Explicit-sources default of the capability struct itself.
-        caps = _caps_from_options({})
-        assert caps.zone_batch is False
