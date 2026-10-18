@@ -430,7 +430,7 @@ class ScanSidebar(QWidget):
         self.scan_btn.setFixedHeight(SCAN_BUTTON_HEIGHT)
         self.scan_btn.setProperty("scanning", "false")
         self.scan_btn.setIcon(qta.icon("fa5s.camera-retro", color=THEME.text_on_accent))
-        self.scan_btn.setToolTip(wrap_tooltip("Scan the selected frames (or crop zones) into the output folder, or stop the scan"))
+        self.scan_btn.setToolTip(wrap_tooltip("Scan the selected frames or crop zones into the output folder, or stop the scan"))
         foot.addWidget(self.scan_btn)
         layout.addWidget(self.footer)
 
