@@ -10,13 +10,7 @@ frames,each scanning as its own image. Read after ``exec()`` via``window()``
 import qtawesome as qta
 from PyQt6.QtCore import pyqtSlot
 from PyQt6.QtGui import QKeySequence, QPixmap, QShortcut
-from PyQt6.QtWidgets import (
-    QDialog,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QVBoxLayout,
-)
+from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 from typing import cast
 
 from negpy.desktop.converters import ImageConverter
@@ -39,16 +33,7 @@ class QuickScanPreviewDialog(RollPreviewSignalsMixin, QDialog):
     """Preview the current holder position at low res; set a crop window or crop zones for the real scan."""
 
     def __init__(
-        self,
-        controller,
-        device: ScannerDevice,
-        initial_window=None,
-        film_type: str = "negative",
-        parent=None,
-        *,
-        repo=None,
-        zone_mode: bool = False,
-        initial_zones=None,
+        self, controller, device: ScannerDevice, initial_window=None, film_type: str = "negative", parent=None, *, repo=None, zone_mode: bool = False, initial_zones=None,
     ) -> None:
         super().__init__(parent)
         self._controller = controller
