@@ -67,7 +67,7 @@ class _ModuleWithDevice(FakeSaneModule):
         super().__init__(dev=dev)
         self.device_id = device_id
 
-    def get_devices(self, local_only: bool = False) -> list[tuple[str, str, str]]:
+    def get_devices(self) -> list[tuple[str, str, str]]:
         return [(self.device_id, "Nikon", "LS-50")]
 
 
