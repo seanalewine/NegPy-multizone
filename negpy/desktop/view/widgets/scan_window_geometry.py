@@ -53,3 +53,22 @@ def resize_corner(rect: Rect, corner: int, fx: float, fy: float) -> Rect:
     elif corner == 3:
         x1, y2 = fx, fy
     return (x1, y1, x2, y2)
+
+
+def hit_zone_edge(rect: Rect, fx: float, fy: float, tol: float) -> bool:
+    """True when (fx, fy) is within `tol` of an edge of `rect` (corners included).
+
+    The border-click band for selecting a zone: a point just inside or just outside
+    any of the four edges counts as "on the border".
+    """
+    x1, y1, x2, y2 = rect
+    near_x = min(abs(fx - x1), abs(fx - x2)) <= tol
+    near_y = min(abs(fy - y1), abs(fy - y2)) <= tol
+    inside_x = x1 <= fx <= x2
+    inside_y = y1 <= fy <= y2
+    return (near_x and inside_y) or (near_y and inside_x)
+
+
+def default_zone() -> Rect:
+    """A centred zone for the Add button when no zone exists to copy (0.5 wide, 0.36 tall)."""
+    return (0.25, 0.32, 0.75, 0.68)

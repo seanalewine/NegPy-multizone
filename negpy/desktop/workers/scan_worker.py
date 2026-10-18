@@ -48,7 +48,7 @@ class PrescanRequest:
 
 @dataclass(frozen=True)
 class BatchRequest:
-    """Scan an explicit set of frames, one SANE session each, frame-numbered output."""
+    """Scan an explicit set of frames (or flatbed zones), one session each, numbered output."""
 
     device_id: str
     params: ScanParams  # base; frame + window + offset overridden per iteration
@@ -66,6 +66,13 @@ class BatchRequest:
     frame_offsets: dict[int, float] = field(default_factory=dict)
     eject_when_done: bool = True
     as_roll: bool = False
+    #: Progress-phase noun for this batch: "Frame" (strip feeder) or "Zone" (flatbed+TPU
+    #: zone batch). Only the human-facing strings use it.
+    unit_name: str = "Frame"
+    #: False for flatbed zone batches: the zone index is only output numbering, never a
+    #: SANE "frame" selection (a flatbed has no frame option — selecting one is an error).
+    #: Frame feeders keep True so each pass addresses its slot and applies feed-axis drift.
+    address_frames: bool = True
 
 
 @dataclass(frozen=True)
@@ -254,16 +261,23 @@ class ScanWorker(QObject):
                     outcome = ("cancelled", None)
                     break
                 window = req.frame_windows.get(frame, req.params.window)
-                # No floor here: a transport that cannot back up clamps in its own backend, and
-                # one that re-addresses an absolute frame may legitimately go negative.
-                offset = frame_offset_mm(req.params.frame_offset_mm, req.frame_offset_modifier_mm, req.frame_offsets, frame)
-                frame_params = dataclasses.replace(req.params, frame=frame, window=window, frame_offset_mm=offset)
-                logger.info("Batch frame %d at %+.2f mm on the feed axis", frame, offset)
+                if req.address_frames:
+                    # No floor here: a transport that cannot back up clamps in its own
+                    # backend, and one that re-addresses an absolute frame may legitimately
+                    # go negative.
+                    offset = frame_offset_mm(req.params.frame_offset_mm, req.frame_offset_modifier_mm, req.frame_offsets, frame)
+                    frame_params = dataclasses.replace(req.params, frame=frame, window=window, frame_offset_mm=offset)
+                    logger.info("Batch %s %d at %+.2f mm on the feed axis", req.unit_name.lower(), frame, offset)
+                else:
+                    # Zone batch: the index is output numbering only — no frame selection,
+                    # no feed axis (a flatbed has neither).
+                    frame_params = dataclasses.replace(req.params, frame=None, window=window, frame_offset_mm=0.0)
+                    logger.info("Batch %s %d", req.unit_name.lower(), frame)
                 base = index / total
 
                 # The frame's position in the run rides on the phase string: a batch's global
                 # percentage alone says nothing about how much film is left.
-                position = f"Frame {index + 1} of {total}"
+                position = f"{req.unit_name} {index + 1} of {total}"
 
                 def _progress(fraction: float, phase: str = "Scanning", _base: float = base, _at: str = position) -> None:
                     self.progress.emit(_base + min(1.0, max(0.0, fraction)) / total, f"{_at} — {phase}")

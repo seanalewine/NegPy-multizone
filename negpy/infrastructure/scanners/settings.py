@@ -40,6 +40,10 @@ class ScannerSettings:
     output_format: str = "TIFF"
     filename_pattern: str = '{{ date }}_{{ "%03d" % seq }}'
     scan_window: Rect | None = None
+    #: Ordered normalized (x1,y1,x2,y2) crop zones for zone_batch devices (flatbed+TPU).
+    #: Order is scan order; each zone becomes one output file, numbered 1..N. None keeps
+    #: the single-window behaviour.
+    zones: list[Rect] | None = None
     frame_offset_mm: float = 0.0
     # Feed-axis drift (mm/frame): frame N gets frame_offset_mm + (N-1) * modifier, floored at
     # 0. Corrects progressive frame-gap drift along a strip.
@@ -68,6 +72,8 @@ class ScannerSettings:
         # JSON round-trips tuples as lists and dict keys as strings; coerce back.
         if isinstance(self.scan_window, list):
             object.__setattr__(self, "scan_window", tuple(self.scan_window))
+        if isinstance(self.zones, list):
+            object.__setattr__(self, "zones", [tuple(z) for z in self.zones])
         if isinstance(self.frame_windows, dict):
             object.__setattr__(
                 self,
@@ -125,6 +131,17 @@ def resolve_batch_selection(
     if capacity is None:
         return (), {}, settings.scan_window
     return tuple(range(1, capacity + 1)), {}, None
+
+
+def resolve_zone_selection(settings: ScannerSettings) -> tuple[tuple[int, ...], dict[int, Rect]]:
+    """(zone indices, per-zone windows) for a zone_batch device.
+
+    Order is the list order; each zone becomes one output file numbered 1..N. An empty
+    result means the operator laid out no zones — the caller falls back to the single
+    `scan_window` path.
+    """
+    zones = settings.zones or []
+    return tuple(range(1, len(zones) + 1)), {i: z for i, z in enumerate(zones, start=1)}
 
 
 def parse_frame_spec(text: str) -> tuple[int, ...]:

@@ -647,11 +647,17 @@ def _require_writable_option(opt, option_name: str, absent_message: str) -> None
 
 def _caps_from_options(opt, device_id: str = "") -> ScannerCapabilities:
     """Build ScannerCapabilities from a SANE option map. Pure — no `sane` import."""
-    sources = _detect_explicit_sources(opt)
+    explicit_sources = _detect_explicit_sources(opt)
+    sources = explicit_sources
     if not sources and _infer_film_scanner(opt, device_id):
         # Dedicated film scanner with no `source` option (pieusb). `sources` is only a detection
         # and UI gate, never applied to the device, so populate it to unblock scanning.
         sources = (ScanMode.NEGATIVE, ScanMode.POSITIVE, ScanMode.TRANSPARENCY)
+    adapter_frame_capacity = _detect_adapter_frame_capacity(opt)
+    # Zone batch is a flatbed+TPU "single-surface" device: a real `source` option with a
+    # transparency choice (an explicit source, not the film-scanner inference) and no frame
+    # slots to batch by. Dedicated film scanners without a `source` option never qualify.
+    zone_batch = ScanMode.TRANSPARENCY in explicit_sources and adapter_frame_capacity is None
     return ScannerCapabilities(
         ir_channel=_detect_ir(opt, device_id),
         supported_dpi=_detect_dpi(opt),
@@ -660,11 +666,12 @@ def _caps_from_options(opt, device_id: str = "") -> ScannerCapabilities:
         max_area_mm=_detect_max_area(opt),
         auto_exposure=_detect_auto_exposure(opt),
         autofocus="autofocus" in opt,
-        adapter_frame_capacity=_detect_adapter_frame_capacity(opt),
+        adapter_frame_capacity=adapter_frame_capacity,
         adapter_frame_control=_detect_adapter_frame_control(opt),
         can_eject=_detect_eject(opt),
         frame_pitch_mm=_feed_pitch_mm(opt),
         exposure_time_us=_detect_scan_exposure_time(opt),
+        zone_batch=zone_batch,
     )
 
 

@@ -78,6 +78,10 @@ class ScannerCapabilities:
     superfine: bool = False  # one line per pass, slower, owes the host no registration
     #: One metered exposure can be reused for every later scan (`ScanParams.exposures`).
     exposure_lock: bool = False
+    #: Flatbed+TPU "single-surface" device: no frame slots, but the operator can lay out
+    #: several crop windows on one transparency preview and scan them as a zone batch.
+    #: Mutually exclusive with a strip feeder by construction (see `_caps_from_options`).
+    zone_batch: bool = False
 
 
 @dataclass(frozen=True)
