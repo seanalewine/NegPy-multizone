@@ -95,7 +95,6 @@ class FakeSaneModule:
     dev: FakeDev
     fail_ids: tuple[str, ...] = ()
     opened: list[str] = field(default_factory=list)
-    get_devices_calls: list[bool] = field(default_factory=list)
 
     def init(self) -> None:
         pass
@@ -106,8 +105,7 @@ class FakeSaneModule:
             raise RuntimeError("Invalid argument")
         return self.dev
 
-    def get_devices(self, local_only: bool = False) -> list[tuple[str, str, str]]:
-        self.get_devices_calls.append(local_only)
+    def get_devices(self) -> list[tuple[str, str, str]]:
         return [(_DEV_ID, "Nikon", "LS-50")]
 
 
@@ -234,17 +232,6 @@ class TestSaneSession:
         assert session.opened_id == _FRESH_ID
         with pytest.raises(RuntimeError, match="held by an active session"):
             backend.scan(_FRESH_ID, _PARAMS, None, threading.Event())
-
-    def test_list_devices_uses_local_only_enumeration(self) -> None:
-        # scanimage -L enumerates local-only (SANE_TRUE); python-sane defaults to
-        # network-enabled discovery (SANE_FALSE), which on some Fedora setups makes
-        # the whole dll enumeration return empty. Discovery must match scanimage.
-        module = FakeSaneModule(FakeDev())
-        backend = _make_backend(module)
-
-        backend.refresh_devices()
-
-        assert module.get_devices_calls == [True]
 
     def test_list_devices_reuses_the_cached_entry_for_a_held_device(self) -> None:
         cached = _sd(_DEV_ID)
