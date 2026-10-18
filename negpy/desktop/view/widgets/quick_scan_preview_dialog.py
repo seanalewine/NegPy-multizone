@@ -2,9 +2,9 @@
 no addressable frame adapter (Plustek: one manual holder, not a strip/roll feeder —
 see StripPreviewDialog for that case).
 
-Zone mode (flatbed+TPU, e.g. the Epson V600): the same preview hosts any number of
-persistent crop zones, each scanning as its own image. Read after ``exec()`` via
-``window()`` (single-window) or ``zones()`` (zone mode).
+Zone mode (flatbed+TPU scanner): the same scan preview contains multiple image 
+frames,each scanning as its own image. Read after ``exec()`` via``window()`` 
+(single-window) or ``zones()`` (zone mode).
 """
 
 import qtawesome as qta
@@ -66,9 +66,9 @@ class QuickScanPreviewDialog(RollPreviewSignalsMixin, QDialog):
 
         if zone_mode:
             help_lbl = QLabel(
-                "Preview the transparency area, then draw a box for each crop — zones are added "
-                "as you draw and stay visible. Click a zone's border to select it (or use the "
-                "arrows), Delete to remove it. Each zone scans as its own image, in order."
+                "Preview the transparency area, then draw a box for each frame or zone — a corner "
+                "to resize, inside to move. Click a zone's border to select it (or use the navigation "
+                "arrows), Delete to remove it. Each frame scans as its own image, in order."
             )
         else:
             help_lbl = QLabel(
