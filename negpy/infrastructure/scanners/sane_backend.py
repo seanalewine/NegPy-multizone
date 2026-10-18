@@ -937,7 +937,7 @@ class SaneBackend:
             logger.error(f"SANE init failed: {e}")
             return []
 
-        raw_devices = self._sane.get_devices(True)
+        raw_devices = self._sane.get_devices()
         logger.info(f"SANE found {count_of(len(raw_devices), 'raw device')}: {[r[0] for r in raw_devices]}")
         devices: list[ScannerDevice] = []
         for raw in raw_devices:
